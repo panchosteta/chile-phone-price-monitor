@@ -3,7 +3,8 @@ import {
   EXCLUDED_CONDITION_REGEX,
   EXCLUDED_ACCESSORY_OR_PLAN_REGEX,
   extractCapacity,
-  extractColor
+  extractColor,
+  extractGpuVariant
 } from "./config.mjs";
 
 const DEFAULT_HEADERS = {
@@ -115,9 +116,10 @@ function isRecentChileDate(ddmmyyyy, maxAgeDays = 3) {
 
 async function fetchSoloTodoForPhone(phone, storeMap) {
   const matchedProducts = new Map();
+  const categoryId = phone.soloTodoCategoryId || 6;
 
   for (const query of phone.soloTodoSearches) {
-    const url = `https://publicapi.solotodo.com/products/browse/?categories=6&search=${encodeURIComponent(
+    const url = `https://publicapi.solotodo.com/products/browse/?categories=${categoryId}&search=${encodeURIComponent(
       query
     )}&page_size=50`;
     const res = await fetchWithTimeout(url);
@@ -128,7 +130,8 @@ async function fetchSoloTodoForPhone(phone, storeMap) {
       for (const entry of bucket.product_entries || []) {
         const p = entry.product;
         if (!p || matchedProducts.has(p.id)) continue;
-        if (phone.matchesTitle(p.name) && isCleanNewUnlocked(p.name)) {
+        const matchInput = `${p.name} ${p.specs?.memory_quantity_unicode || ""}`;
+        if (phone.matchesTitle(matchInput) && isCleanNewUnlocked(p.name)) {
           matchedProducts.set(p.id, p);
         }
       }
@@ -153,9 +156,13 @@ async function fetchSoloTodoForPhone(phone, storeMap) {
     for (const item of entData.results || []) {
       const productName = item.product?.name || "";
       const skuColor =
-        item.product?.specs?.color_unicode || extractColor(productName);
+        phone.kind === "gpu"
+          ? extractGpuVariant(productName)
+          : item.product?.specs?.color_unicode || extractColor(productName);
       const skuCapacity =
-        item.product?.specs?.internal_storage_unicode || extractCapacity(productName);
+        phone.fixedCapacity ||
+        item.product?.specs?.internal_storage_unicode ||
+        extractCapacity(productName);
 
       for (const entity of item.entities || []) {
         if (entity.cell_plan) continue;
@@ -172,7 +179,7 @@ async function fetchSoloTodoForPhone(phone, storeMap) {
         if (!Number.isFinite(normalPrice) || normalPrice < phone.minPlausiblePrice) continue;
 
         // Prefer capacity explicitly stated in the store's own title/URL over SoloTodo SKU mapping
-        const detectedCap = extractCapacity(`${entityTitle} ${externalUrl}`);
+        const detectedCap = phone.fixedCapacity || extractCapacity(`${entityTitle} ${externalUrl}`);
         const capacity = detectedCap !== "No especificada" ? detectedCap : skuCapacity;
 
         const storeName = storeMap.get(entity.store) || `Tienda #${entity.store}`;
@@ -183,7 +190,10 @@ async function fetchSoloTodoForPhone(phone, storeMap) {
           store: storeName,
           title: entityTitle,
           capacity,
-          color: skuColor || extractColor(entityTitle),
+          color:
+            phone.kind === "gpu"
+              ? extractGpuVariant(`${productName} ${entityTitle}`)
+              : skuColor || extractColor(entityTitle),
           specificPrice: offerPrice,
           anyPaymentPrice: normalPrice,
           stockConfirmed: true,
@@ -222,7 +232,8 @@ async function fetchKnastaForPhone(phone) {
 
       const title = p.title || p.seo_title || "";
       const url = unwrapKnastaUrl(p.url || "");
-      if (!phone.matchesTitle(`${title} ${p.seo_title || ""}`)) continue;
+      const brandPrefix = p.brand && !title.toLowerCase().includes(p.brand.toLowerCase()) ? `${p.brand} ` : "";
+      if (!phone.matchesTitle(`${brandPrefix}${title} ${p.seo_title || ""}`)) continue;
       if (!isCleanNewUnlocked(title, url)) continue;
       if (!isRecentChileDate(p.current_day, 3)) continue;
 
@@ -238,7 +249,7 @@ async function fetchKnastaForPhone(phone) {
           ? internetPrice
           : currentPrice;
 
-      const capacity = extractCapacity(`${title} ${p.seo_title || ""} ${url}`);
+      const capacity = phone.fixedCapacity || extractCapacity(`${title} ${p.seo_title || ""} ${url}`);
 
       listings.push({
         phoneId: phone.id,
@@ -250,7 +261,7 @@ async function fetchKnastaForPhone(phone) {
         store: p.retail_label || p.retail || "Tienda",
         title,
         capacity,
-        color: extractColor(title),
+        color: phone.kind === "gpu" ? extractGpuVariant(title) : extractColor(title),
         specificPrice,
         anyPaymentPrice,
         stockConfirmed: true,

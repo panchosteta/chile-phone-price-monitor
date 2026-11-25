@@ -101,7 +101,7 @@ export async function sendTestNotification(serviceUrl = "") {
     try {
       await sendNtfyRaw({
         title: "Prueba Monitor Precios Chile",
-        body: `✅ Monitor de Precios Chile activo y conectado a ntfy.sh.\nEquipos: iPhone 17 Pro, Galaxy Z Fold 8 y Galaxy S26 Ultra (todos los almacenamientos, nuevos y liberados).${
+        body: `✅ Monitor de Precios Chile activo y conectado a ntfy.sh.\nProductos: iPhone 17 Pro, Galaxy Z Fold 8, Galaxy S26 Ultra, Xiaomi 17 Ultra y AMD Radeon RX 9060 XT 16 GB (nuevos).${
           serviceUrl ? `\nDashboard: ${serviceUrl}` : ""
         }`,
         priority: "default",
