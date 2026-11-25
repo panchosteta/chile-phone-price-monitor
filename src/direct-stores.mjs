@@ -21,8 +21,13 @@ function isCleanNewUnlocked(text = "", url = "") {
 }
 
 function parseClpNumber(val) {
-  if (typeof val === "number") return Number.isFinite(val) ? Math.round(val) : null;
+  if (typeof val === "number") return Number.isFinite(val) && val > 0 ? Math.round(val) : null;
   if (typeof val !== "string") return null;
+  // Handle decimal strings like "1349990.0" vs thousand-separated strings like "1.349.990"
+  if (/^\d+\.\d{1,2}$/.test(val.trim())) {
+    const n = Math.round(Number(val.trim()));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
   const cleaned = val.replace(/[^\d]/g, "");
   if (!cleaned) return null;
   const n = Number(cleaned);
@@ -35,7 +40,9 @@ function extractLdJsonBlocks(html = "") {
   let m;
   while ((m = re.exec(html))) {
     try {
-      out.push(JSON.parse(m[1]));
+      const parsed = JSON.parse(m[1]);
+      if (Array.isArray(parsed)) out.push(...parsed);
+      else out.push(parsed);
     } catch {
       // ignore malformed JSON-LD block
     }
@@ -57,8 +64,16 @@ function getDirectSearchTerms(phone) {
   return [phone.soloTodoSearches[0]];
 }
 
+// Serialize heavy Paris fetches (~4 MB HTML each) so Render Free 0.1 CPU never times out
+let parisQueue = Promise.resolve();
+function runInParisQueue(fn) {
+  const next = parisQueue.then(fn, fn);
+  parisQueue = next.catch(() => {});
+  return next;
+}
+
 /**
- * Falabella Chile direct search via __NEXT_DATA__ (real-time CMR + Internet/Event prices)
+ * 1. Falabella Chile direct search via __NEXT_DATA__ (real-time CMR + Internet/Event prices)
  */
 export async function fetchFalabellaDirect(phone) {
   const listings = [];
@@ -91,7 +106,9 @@ export async function fetchFalabellaDirect(phone) {
 
       for (const pr of prices) {
         if (pr.crossed) continue;
-        const firstVal = Array.isArray(pr.price) ? parseClpNumber(pr.price[0]) : parseClpNumber(pr.price);
+        const firstVal = Array.isArray(pr.price)
+          ? parseClpNumber(pr.price[0])
+          : parseClpNumber(pr.price);
         if (!firstVal || firstVal < phone.minPlausiblePrice) continue;
 
         if (pr.type === "cmrPrice") {
@@ -139,16 +156,8 @@ export async function fetchFalabellaDirect(phone) {
   return listings;
 }
 
-// Limit concurrent heavy HTML fetches (Paris search pages are ~4 MB each) so Render Free 0.1 CPU never times out
-let parisQueue = Promise.resolve();
-function runInParisQueue(fn) {
-  const next = parisQueue.then(fn, fn);
-  parisQueue = next.catch(() => {});
-  return next;
-}
-
 /**
- * Paris.cl direct search via JSON-LD ItemList + top 2 product pages for exact Cencosud price
+ * 2. Paris.cl direct search via JSON-LD ItemList + top 2 product pages for exact Cencosud price
  */
 export async function fetchParisDirect(phone) {
   return runInParisQueue(async () => {
@@ -171,9 +180,10 @@ export async function fetchParisDirect(phone) {
         if (!prod) continue;
         const brand = prod.brand?.name || "";
         const rawTitle = prod.name || li.name || "";
-        const title = brand && !rawTitle.toLowerCase().includes(brand.toLowerCase())
-          ? `${brand} ${rawTitle}`
-          : rawTitle;
+        const title =
+          brand && !rawTitle.toLowerCase().includes(brand.toLowerCase())
+            ? `${brand} ${rawTitle}`
+            : rawTitle;
         const url = prod.url || "";
         if (!url || seenUrls.has(url)) continue;
         if (!phone.matchesTitle(`${title} ${url}`)) continue;
@@ -209,7 +219,6 @@ export async function fetchParisDirect(phone) {
 
     candidates.sort((a, b) => a.specificPrice - b.specificPrice);
 
-    // Enrich top 2 cheapest Paris listings with product page JSON-LD offers[] to get exact Cencosud card price
     for (const item of candidates.slice(0, 2)) {
       try {
         const res = await fetchDirect(item.url, 12000);
@@ -245,7 +254,7 @@ export async function fetchParisDirect(phone) {
 }
 
 /**
- * Hites.com direct search via JSON-LD ItemList
+ * 3. Hites.com direct search via JSON-LD ItemList
  */
 export async function fetchHitesDirect(phone) {
   const listings = [];
@@ -302,57 +311,206 @@ export async function fetchHitesDirect(phone) {
 }
 
 /**
- * Live direct price refresh for product pages on stores that serve clean JSON-LD / Shopify JSON
- * (Notebooksya!, Cintegral, OPC Store, Hites, ABC) so flash drops are caught before SoloTodo/Knasta update.
+ * 4. MacOnline direct product JSON-LD array (returns all 9 iPhone 17 Pro SKUs in 1 request)
+ */
+export async function fetchMacOnlineDirect(phone) {
+  if (phone.id !== "iphone-17-pro") return [];
+  const res = await fetchDirect("https://www.maconline.com/products/iphone-17-pro", 10000);
+  if (!res.ok) throw new Error(`MacOnline HTTP ${res.status}`);
+  const html = await res.text();
+  const lds = extractLdJsonBlocks(html);
+  const listings = [];
+
+  for (const prod of lds) {
+    if (prod?.["@type"] !== "Product") continue;
+    const title = prod.name || "";
+    if (!phone.matchesTitle(title) || !isCleanNewUnlocked(title)) continue;
+    const offer = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers;
+    if (/OutOfStock/i.test(String(offer?.availability || ""))) continue;
+
+    const price = parseClpNumber(offer?.price);
+    if (!price || price < phone.minPlausiblePrice) continue;
+
+    const rawUrl = offer?.url || prod.url || "https://www.maconline.com/products/iphone-17-pro";
+    // MacOnline JSON-LD uses #default_sku=... whereas web links use ?default_sku=...
+    const url = rawUrl.replace("#default_sku=", "?default_sku=");
+
+    listings.push({
+      phoneId: phone.id,
+      phoneName: phone.name,
+      source: "MacOnline Directo",
+      isDirect: true,
+      store: "MacOnline",
+      title,
+      capacity: extractCapacity(title),
+      color: extractColor(title),
+      specificPrice: price,
+      anyPaymentPrice: price,
+      stockConfirmed: true,
+      stockNote: "En stock (MacOnline directo)",
+      url,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  return listings;
+}
+
+/**
+ * 5-12. Live direct price & stock refresh on product pages of open Chilean stores:
+ * ABC, Tienda Movistar, PC Factory (official API), Eylstore, AllTec, OPC Store, Cintegral, Notebooksya!
  */
 export async function refreshDirectProductPrices(phone, listings) {
   const refreshableHosts = [
-    "notebooksya.cl",
-    "cintegral.cl",
+    "abc.cl",
+    "catalogo.movistar.cl",
+    "pcfactory.cl",
+    "eylstore.cl",
+    "alltec.cl",
     "opcstore.cl",
+    "cintegral.cl",
+    "notebooksya.cl",
     "hites.com"
   ];
 
-  const targets = listings
-    .filter((l) => {
-      if (l.isDirect) return false;
-      try {
-        const host = new URL(l.url).hostname.replace(/^www\./, "");
-        return refreshableHosts.some((h) => host === h || host.endsWith(`.${h}`));
-      } catch {
-        return false;
-      }
-    })
-    .slice(0, 4);
+  // Pick up to 1-2 cheapest URLs per distinct open store host so we cover all open stores fast
+  const perHostCount = new Map();
+  const targets = [];
+  for (const l of listings) {
+    if (l.isDirect) continue;
+    let host;
+    try {
+      host = new URL(l.url).hostname.replace(/^www\./, "");
+    } catch {
+      continue;
+    }
+    const matchedHost = refreshableHosts.find((h) => host === h || host.endsWith(`.${h}`));
+    if (!matchedHost) continue;
+    const cnt = perHostCount.get(matchedHost) || 0;
+    const maxForHost = matchedHost === "abc.cl" ? 2 : 1;
+    if (cnt >= maxForHost) continue;
+    perHostCount.set(matchedHost, cnt + 1);
+    targets.push({ item: l, host: matchedHost });
+    if (targets.length >= 8) break;
+  }
 
   if (targets.length === 0) return;
 
   await Promise.allSettled(
-    targets.map(async (item) => {
-      const host = new URL(item.url).hostname.replace(/^www\./, "");
+    targets.map(async ({ item, host }) => {
+      const markDirect = (storeLabel) => {
+        item.isDirect = true;
+        if (!item.source.includes("Directo")) item.source = `${item.source} + ${storeLabel} Directo`;
+      };
 
-      // Shopify .json endpoint for OPC Store
-      if (host.endsWith("opcstore.cl") && item.url.includes("/products/")) {
+      // A. PC Factory Official REST API
+      if (host === "pcfactory.cl") {
+        const idMatch = item.url.match(/\/producto\/(\d+)/);
+        if (!idMatch) return;
+        const pid = idMatch[1];
+        const [prodRes, priceRes] = await Promise.all([
+          fetchDirect(`https://api.pcfactory.cl/pcfactory-services-catalogo/v1/catalogo/productos/${pid}`, 7000),
+          fetchDirect(`https://api.pcfactory.cl/pcfactory-services-catalogo/v1/catalogo/productos/${pid}/precio`, 7000)
+        ]);
+        if (!priceRes.ok) return;
+        const priceJson = await priceRes.json();
+        const prodJson = prodRes.ok ? await prodRes.json() : null;
+        const stockApprox = Number(prodJson?.stock?.aproximado ?? 1);
+        if (Number.isFinite(stockApprox) && stockApprox <= 0) {
+          item.stockConfirmed = false;
+          item.stockNote = "Sin stock (PC Factory API)";
+          return;
+        }
+        const efectivo = parseClpNumber(priceJson?.precio?.efectivo);
+        const normal = parseClpNumber(priceJson?.precio?.normal);
+        if (efectivo && efectivo >= phone.minPlausiblePrice) {
+          item.specificPrice = efectivo;
+          item.anyPaymentPrice = normal && normal >= efectivo ? normal : efectivo;
+          markDirect("PC Factory");
+          item.stockNote = `En stock (${prodJson?.stock?.aproximado || "disponible"} u. PC Factory API)`;
+        }
+        return;
+      }
+
+      // B. OPC Store Shopify .json
+      if (host === "opcstore.cl" && item.url.includes("/products/")) {
         const jsonUrl = `${item.url.split("?")[0].replace(/\/$/, "")}.json`;
         const res = await fetchDirect(jsonUrl, 7000);
         if (!res.ok) return;
         const data = await res.json();
-        const variant = data?.product?.variants?.[0];
-        const price = parseClpNumber(variant?.price);
+        const price = parseClpNumber(data?.product?.variants?.[0]?.price);
         if (price && price >= phone.minPlausiblePrice) {
           item.specificPrice = price;
           item.anyPaymentPrice = price;
-          item.isDirect = true;
-          item.source = `${item.source} + Directo`;
+          markDirect("OPC Store");
           item.stockNote = "En stock (OPC Store directo)";
         }
         return;
       }
 
-      // JSON-LD Product pages (Notebooksya!, Cintegral, Hites)
-      const res = await fetchDirect(item.url, 7000);
+      const res = await fetchDirect(item.url, 8000);
+      if (res.status === 404 || res.status === 410) {
+        item.stockConfirmed = false;
+        item.stockNote = `No encontrado (HTTP ${res.status})`;
+        return;
+      }
       if (!res.ok) return;
       const html = await res.text();
+
+      // C. ABC (abc.cl) — js-tlp-price (Tarjeta abc Visa) & js-internet-price (Todo medio)
+      if (host === "abc.cl") {
+        if (/product-not-available|sin stock disponible|producto agotado/i.test(html)) {
+          item.stockConfirmed = false;
+          item.stockNote = "Sin stock (ABC directo)";
+          return;
+        }
+        const cardMatch = html.match(/js-tlp-price[\s\S]{0,260}?data-value="([\d.]+)"/i);
+        const internetMatch =
+          html.match(/js-internet-price[\s\S]{0,260}?data-value="([\d.]+)"/i) ||
+          html.match(/price-label[^>]*>\s*Internet\s*<[\s\S]{0,160}?data-value="([\d.]+)"/i);
+        const cardPrice = parseClpNumber(cardMatch?.[1]);
+        const internetPrice = parseClpNumber(internetMatch?.[1]);
+        if (cardPrice || internetPrice) {
+          const validCard = cardPrice && cardPrice >= phone.minPlausiblePrice ? cardPrice : null;
+          const validNet = internetPrice && internetPrice >= phone.minPlausiblePrice ? internetPrice : null;
+          if (validCard || validNet) {
+            item.specificPrice = validCard ?? validNet;
+            item.anyPaymentPrice = validNet ?? validCard;
+            markDirect("ABC");
+            item.stockNote = "En stock (ABC directo)";
+          }
+        }
+        return;
+      }
+
+      // D. Tienda Movistar (catalogo.movistar.cl) — Magento price_info.final_price
+      if (host === "catalogo.movistar.cl") {
+        const m = html.match(/"final_price"\s*:\s*(\d+)/);
+        const price = parseClpNumber(m?.[1]);
+        if (price && price >= phone.minPlausiblePrice) {
+          item.specificPrice = price;
+          item.anyPaymentPrice = price;
+          markDirect("Movistar");
+          item.stockNote = "En stock (Movistar directo)";
+        }
+        return;
+      }
+
+      // E. AllTec (alltec.cl) — OpenGraph product:price:amount
+      if (host === "alltec.cl") {
+        const m = html.match(/<meta\s+property=["']product:price:amount["']\s+content=["']([\d.]+)["']/i);
+        const price = parseClpNumber(m?.[1]);
+        if (price && price >= phone.minPlausiblePrice) {
+          item.specificPrice = price;
+          // Preserve SoloTodo normal/card price if higher, else use live price
+          item.anyPaymentPrice = Math.max(price, item.anyPaymentPrice);
+          markDirect("AllTec");
+          item.stockNote = "En stock (AllTec directo)";
+        }
+        return;
+      }
+
+      // F. Standard JSON-LD Product pages (Eylstore, Cintegral, Notebooksya!, Hites)
       const lds = extractLdJsonBlocks(html);
       const prod =
         lds.find((x) => x["@type"] === "Product") ||
@@ -385,17 +543,14 @@ export async function refreshDirectProductPrices(phone, listings) {
       if (prices.length > 0) {
         prices.sort((a, b) => a - b);
         const livePrice = prices[0];
-        // Update if live price differs (direct store page is ground truth!)
-        if (livePrice < item.specificPrice || host.endsWith("hites.com") || host.endsWith("cintegral.cl")) {
+        if (host === "eylstore.cl" || host === "hites.com" || host === "cintegral.cl") {
+          item.specificPrice = livePrice;
+          item.anyPaymentPrice = host === "eylstore.cl" ? Math.max(livePrice, item.anyPaymentPrice) : livePrice;
+        } else {
           item.specificPrice = Math.min(item.specificPrice, livePrice);
-          if (host.endsWith("hites.com") || host.endsWith("cintegral.cl")) {
-            item.specificPrice = livePrice;
-            item.anyPaymentPrice = livePrice;
-          }
-          item.isDirect = true;
-          if (!item.source.includes("Directo")) item.source = `${item.source} + Directo`;
-          item.stockNote = `En stock (${item.store} directo)`;
         }
+        markDirect(item.store);
+        item.stockNote = `En stock (${item.store} directo)`;
       }
     })
   );
@@ -408,7 +563,8 @@ export async function fetchAllDirectForPhone(phone) {
   const tasks = [
     ["Falabella Directo", fetchFalabellaDirect(phone)],
     ["Paris Directo", fetchParisDirect(phone)],
-    ["Hites Directo", fetchHitesDirect(phone)]
+    ["Hites Directo", fetchHitesDirect(phone)],
+    ["MacOnline Directo", fetchMacOnlineDirect(phone)]
   ];
 
   const settled = await Promise.allSettled(tasks.map(([, p]) => p));

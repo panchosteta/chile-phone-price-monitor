@@ -28,11 +28,16 @@ function buildStoreCapacityOptions(listings) {
     const storeGroup = normalizeStoreGroup(item.store);
     const key = `${storeGroup}|${item.capacity}`;
     const existing = bestByBucket.get(key);
-    if (!existing || item.specificPrice < existing.specificPrice) {
+    if (
+      !existing ||
+      item.specificPrice < existing.specificPrice ||
+      (item.specificPrice === existing.specificPrice && item.isDirect && !existing.isDirect)
+    ) {
       bestByBucket.set(key, {
         store: item.store,
         storeGroup,
         isPriority: isPriorityStore(item.store),
+        isDirect: Boolean(item.isDirect),
         capacity: item.capacity,
         color: item.color,
         specificPrice: item.specificPrice,
