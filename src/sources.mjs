@@ -6,6 +6,7 @@ import {
   extractColor,
   extractGpuVariant
 } from "./config.mjs";
+import { fetchAllDirectForPhone, refreshDirectProductPrices } from "./direct-stores.mjs";
 
 const DEFAULT_HEADERS = {
   "User-Agent":
@@ -349,16 +350,29 @@ function deduplicateListings(listings) {
       byKey.set(key, item);
       continue;
     }
-    const sources = new Set([...existing.source.split(" + "), item.source]);
-    const preferred = existing.source === "SoloTodo" ? existing : item;
+    const sources = new Set([...existing.source.split(" + "), ...item.source.split(" + ")]);
+    // Prefer direct real-time store listing over aggregator cache; else prefer SoloTodo
+    const preferred =
+      item.isDirect && !existing.isDirect
+        ? item
+        : existing.isDirect && !item.isDirect
+          ? existing
+          : existing.source === "SoloTodo"
+            ? existing
+            : item;
     const other = preferred === existing ? item : existing;
     byKey.set(key, {
       ...preferred,
+      isDirect: Boolean(existing.isDirect || item.isDirect),
       source: [...sources].join(" + "),
       capacity: preferred.capacity !== "No especificada" ? preferred.capacity : other.capacity,
       color: preferred.color !== "No especificado" ? preferred.color : other.color,
-      specificPrice: Math.min(preferred.specificPrice, other.specificPrice),
-      anyPaymentPrice: Math.min(preferred.anyPaymentPrice, other.anyPaymentPrice)
+      specificPrice: preferred.isDirect
+        ? preferred.specificPrice
+        : Math.min(preferred.specificPrice, other.specificPrice),
+      anyPaymentPrice: preferred.isDirect
+        ? preferred.anyPaymentPrice
+        : Math.min(preferred.anyPaymentPrice, other.anyPaymentPrice)
     });
   }
   return [...byKey.values()];
@@ -376,9 +390,10 @@ export async function fetchAllListings() {
   const perPhone = await Promise.all(
     TARGET_PHONES.map(async (phone) => {
       const results = [];
-      const [stRes, knRes] = await Promise.allSettled([
+      const [stRes, knRes, dirRes] = await Promise.allSettled([
         storeMap.size > 0 ? fetchSoloTodoForPhone(phone, storeMap) : Promise.resolve([]),
-        fetchKnastaForPhone(phone)
+        fetchKnastaForPhone(phone),
+        fetchAllDirectForPhone(phone)
       ]);
 
       if (stRes.status === "fulfilled") {
@@ -393,9 +408,22 @@ export async function fetchAllListings() {
         errors.push(`Knasta (${phone.name}): ${knRes.reason?.message || knRes.reason}`);
       }
 
+      if (dirRes.status === "fulfilled") {
+        results.push(...dirRes.value.listings);
+        errors.push(...dirRes.value.errors);
+      } else {
+        errors.push(`Directo (${phone.name}): ${dirRes.reason?.message || dirRes.reason}`);
+      }
+
       const deduped = deduplicateListings(results);
       deduped.sort((a, b) => a.specificPrice - b.specificPrice);
-      return { phone, listings: deduped };
+
+      // Refresh live prices directly on product pages of direct-accessible stores (Hites, Notebooksya!, Cintegral, OPC Store)
+      await refreshDirectProductPrices(phone, deduped);
+      const inStock = deduped.filter((l) => l.stockConfirmed !== false);
+      inStock.sort((a, b) => a.specificPrice - b.specificPrice);
+
+      return { phone, listings: inStock };
     })
   );
 
