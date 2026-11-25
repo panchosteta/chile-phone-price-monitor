@@ -1,0 +1,24 @@
+name: Keep Render Alive
+
+on:
+  schedule:
+    # Ping every 5 minutes so Render Free Web Service never hits the 15-min idle sleep
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Render /health endpoint
+        env:
+          HEALTH_URL: ${{ vars.RENDER_HEALTH_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "RENDER_HEALTH_URL variable not set yet"
+            exit 0
+          fi
+          echo "Pinging $HEALTH_URL ..."
+          curl -fsS --retry 2 --retry-delay 5 --max-time 30 "$HEALTH_URL"
+          echo ""

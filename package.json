@@ -1,0 +1,15 @@
+{
+  "name": "chile-phone-price-monitor",
+  "version": "1.0.0",
+  "description": "Monitor de bajas de precio en Chile (iPhone 17 Pro, Galaxy Z Fold 8, Galaxy S26 Ultra - 256 GB nuevos y liberados)",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "check": "node src/check-once.mjs",
+    "check:json": "node src/check-once.mjs --json",
+    "check:notify": "node src/check-once.mjs --notify"
+  }
+}

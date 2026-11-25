@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: chile-phone-price-monitor
+    runtime: node
+    plan: free
+    region: virginia
+    buildCommand: ""
+    startCommand: node src/server.mjs
+    healthCheckPath: /health
+    envVars:
+      - key: CHECK_INTERVAL_SECONDS
+        value: "120"
+      - key: ALERT_COOLDOWN_HOURS
+        value: "12"
+      - key: NTFY_TOPIC
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: CHECK_TOKEN
+        generateValue: true
