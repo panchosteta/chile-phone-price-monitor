@@ -97,13 +97,15 @@ export async function sendTestNotification(serviceUrl = "") {
     return { ok: false, channels, error: "No hay canales configurados" };
   }
   const errors = [];
+  const summaryText = `✅ Monitor de Precios Chile activo.\nProductos: iPhone 17 Pro, Galaxy Z Fold 8, Galaxy S26 Ultra, Xiaomi 17 Ultra, RX 9060 XT 16 GB y RX 9060 XT 8 GB (nuevos).${
+    serviceUrl ? `\nDashboard: ${serviceUrl}` : ""
+  }`;
+
   if (process.env.NTFY_TOPIC) {
     try {
       await sendNtfyRaw({
         title: "Prueba Monitor Precios Chile",
-        body: `✅ Monitor de Precios Chile activo y conectado a ntfy.sh.\nProductos: iPhone 17 Pro, Galaxy Z Fold 8, Galaxy S26 Ultra, Xiaomi 17 Ultra y AMD Radeon RX 9060 XT 16 GB (nuevos).${
-          serviceUrl ? `\nDashboard: ${serviceUrl}` : ""
-        }`,
+        body: summaryText,
         priority: "default",
         tags: "white_check_mark,iphone",
         clickUrl: serviceUrl
@@ -112,6 +114,49 @@ export async function sendTestNotification(serviceUrl = "") {
       errors.push(`ntfy: ${e.message}`);
     }
   }
+
+  if (process.env.DISCORD_WEBHOOK_URL) {
+    try {
+      const res = await fetch(process.env.DISCORD_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: "🔔 **Prueba de conexión — Monitor de Precios Chile**",
+          embeds: [
+            {
+              title: "Monitor activo 24/7 en Render",
+              url: serviceUrl || undefined,
+              description: summaryText,
+              color: 0x3b82f6,
+              timestamp: new Date().toISOString()
+            }
+          ]
+        }),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!res.ok) throw new Error(`Discord HTTP ${res.status}: ${await res.text()}`);
+    } catch (e) {
+      errors.push(`discord: ${e.message}`);
+    }
+  }
+
+  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+    try {
+      const res = await fetch(
+        `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: summaryText }),
+          signal: AbortSignal.timeout(10000)
+        }
+      );
+      if (!res.ok) throw new Error(`Telegram HTTP ${res.status}: ${await res.text()}`);
+    } catch (e) {
+      errors.push(`telegram: ${e.message}`);
+    }
+  }
+
   return { ok: errors.length === 0, channels, errors };
 }
 
@@ -204,6 +249,9 @@ export async function notifyDeals(deals) {
     if (anySuccess) {
       sent += 1;
       markDealsAlerted([deal]);
+    }
+    if (deals.length > 1) {
+      await new Promise((r) => setTimeout(r, 400));
     }
   }
 

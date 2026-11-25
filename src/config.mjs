@@ -91,6 +91,31 @@ export const TARGET_PHONES = [
         );
       return is9060Xt && is16Gb && !is8Gb && !isPrebuiltPc;
     }
+  },
+  {
+    id: "rx-9060-xt-8gb",
+    name: "AMD Radeon RX 9060 XT (8 GB)",
+    kind: "gpu",
+    fixedCapacity: "8 GB GDDR6",
+    soloTodoCategoryId: 2,
+    thresholds: {
+      specificPaymentMax: 489000,
+      anyPaymentMax: 499990
+    },
+    minPlausiblePrice: 250000,
+    soloTodoSearches: ["9060 XT"],
+    knastaSearches: ["rx 9060 xt 8gb", "radeon 9060 xt 8gb"],
+    matchesTitle(text) {
+      const s = normalize(text);
+      const is9060Xt = /\b(rx\s*)?9060\s*xt\b/.test(s);
+      const is8Gb = /(?:^|[^0-9])8\s*g(b|d|o)?(?![0-9a-z])/.test(s);
+      const is16Gb = /(?:^|[^0-9])16\s*g(b|d|o)?(?![0-9a-z])/.test(s);
+      const isPrebuiltPc =
+        /\b(pc\s*gamer|computador|torre\s*gamer|gabinete|notebook|laptop|ryzen\s*[3579]|core\s*i[3579]|i[579]-\d{4,5}|win\s*1[01])\b/.test(
+          s
+        );
+      return is9060Xt && is8Gb && !is16Gb && !isPrebuiltPc;
+    }
   }
 ];
 
