@@ -139,97 +139,109 @@ export async function fetchFalabellaDirect(phone) {
   return listings;
 }
 
+// Limit concurrent heavy HTML fetches (Paris search pages are ~4 MB each) so Render Free 0.1 CPU never times out
+let parisQueue = Promise.resolve();
+function runInParisQueue(fn) {
+  const next = parisQueue.then(fn, fn);
+  parisQueue = next.catch(() => {});
+  return next;
+}
+
 /**
- * Paris.cl direct search via JSON-LD ItemList + top 3 product pages for exact Cencosud price
+ * Paris.cl direct search via JSON-LD ItemList + top 2 product pages for exact Cencosud price
  */
 export async function fetchParisDirect(phone) {
-  const candidates = [];
-  const seenUrls = new Set();
+  return runInParisQueue(async () => {
+    const candidates = [];
+    const seenUrls = new Set();
 
-  for (const term of getDirectSearchTerms(phone)) {
-    const res = await fetchDirect(
-      `https://www.paris.cl/search?q=${encodeURIComponent(term)}`
-    );
-    if (!res.ok) throw new Error(`Paris HTTP ${res.status}`);
-    const html = await res.text();
-    const lds = extractLdJsonBlocks(html);
-    const wp = lds.find((x) => x["@type"] === "WebPage" && x.mainEntity?.itemListElement);
-    const items = wp?.mainEntity?.itemListElement || [];
-
-    for (const li of items) {
-      const prod = li?.item;
-      if (!prod) continue;
-      const brand = prod.brand?.name || "";
-      const rawTitle = prod.name || li.name || "";
-      const title = brand && !rawTitle.toLowerCase().includes(brand.toLowerCase())
-        ? `${brand} ${rawTitle}`
-        : rawTitle;
-      const url = prod.url || "";
-      if (!url || seenUrls.has(url)) continue;
-      if (!phone.matchesTitle(`${title} ${url}`)) continue;
-      if (!isCleanNewUnlocked(title, url)) continue;
-
-      const offer = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers;
-      const price = parseClpNumber(offer?.price);
-      if (!price || price < phone.minPlausiblePrice) continue;
-      if (/OutOfStock/i.test(String(offer?.availability || ""))) continue;
-
-      seenUrls.add(url);
-      candidates.push({
-        phoneId: phone.id,
-        phoneName: phone.name,
-        source: "Paris Directo",
-        isDirect: true,
-        store: "Paris",
-        title: rawTitle,
-        capacity: phone.fixedCapacity || extractCapacity(`${title} ${url}`),
-        color:
-          phone.kind === "gpu"
-            ? extractGpuVariant(`${title} ${url}`)
-            : extractColor(`${title} ${url}`),
-        specificPrice: price,
-        anyPaymentPrice: price,
-        stockConfirmed: true,
-        stockNote: "En stock (Paris directo)",
-        url,
-        updatedAt: new Date().toISOString()
-      });
-    }
-  }
-
-  candidates.sort((a, b) => a.specificPrice - b.specificPrice);
-
-  // Enrich top 3 cheapest Paris listings with product page JSON-LD offers[] to get exact Cencosud card price
-  await Promise.allSettled(
-    candidates.slice(0, 3).map(async (item) => {
-      const res = await fetchDirect(item.url, 8000);
-      if (!res.ok) return;
+    for (const term of getDirectSearchTerms(phone)) {
+      const res = await fetchDirect(
+        `https://www.paris.cl/search?q=${encodeURIComponent(term)}`,
+        18000
+      );
+      if (!res.ok) throw new Error(`Paris HTTP ${res.status}`);
       const html = await res.text();
       const lds = extractLdJsonBlocks(html);
-      const prod = lds.find((x) => x["@type"] === "Product");
-      const offers = Array.isArray(prod?.offers)
-        ? prod.offers
-        : prod?.offers
-          ? [prod.offers]
-          : [];
-      const validPrices = offers
-        .filter((o) => !/OutOfStock/i.test(String(o?.availability || "")))
-        .map((o) => parseClpNumber(o?.price))
-        .filter((p) => p && p >= phone.minPlausiblePrice)
-        .sort((a, b) => a - b);
+      const wp = lds.find((x) => x["@type"] === "WebPage" && x.mainEntity?.itemListElement);
+      const items = wp?.mainEntity?.itemListElement || [];
 
-      if (validPrices.length >= 2) {
-        // Paris Product JSON-LD typically lists [cencosudCardPrice, internetPrice, normalPrice]
-        item.specificPrice = validPrices[0];
-        item.anyPaymentPrice = validPrices[1];
-      } else if (validPrices.length === 1) {
-        item.specificPrice = validPrices[0];
-        item.anyPaymentPrice = validPrices[0];
+      for (const li of items) {
+        const prod = li?.item;
+        if (!prod) continue;
+        const brand = prod.brand?.name || "";
+        const rawTitle = prod.name || li.name || "";
+        const title = brand && !rawTitle.toLowerCase().includes(brand.toLowerCase())
+          ? `${brand} ${rawTitle}`
+          : rawTitle;
+        const url = prod.url || "";
+        if (!url || seenUrls.has(url)) continue;
+        if (!phone.matchesTitle(`${title} ${url}`)) continue;
+        if (!isCleanNewUnlocked(title, url)) continue;
+
+        const offer = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers;
+        const price = parseClpNumber(offer?.price);
+        if (!price || price < phone.minPlausiblePrice) continue;
+        if (/OutOfStock/i.test(String(offer?.availability || ""))) continue;
+
+        seenUrls.add(url);
+        candidates.push({
+          phoneId: phone.id,
+          phoneName: phone.name,
+          source: "Paris Directo",
+          isDirect: true,
+          store: "Paris",
+          title: rawTitle,
+          capacity: phone.fixedCapacity || extractCapacity(`${title} ${url}`),
+          color:
+            phone.kind === "gpu"
+              ? extractGpuVariant(`${title} ${url}`)
+              : extractColor(`${title} ${url}`),
+          specificPrice: price,
+          anyPaymentPrice: price,
+          stockConfirmed: true,
+          stockNote: "En stock (Paris directo)",
+          url,
+          updatedAt: new Date().toISOString()
+        });
       }
-    })
-  );
+    }
 
-  return candidates;
+    candidates.sort((a, b) => a.specificPrice - b.specificPrice);
+
+    // Enrich top 2 cheapest Paris listings with product page JSON-LD offers[] to get exact Cencosud card price
+    for (const item of candidates.slice(0, 2)) {
+      try {
+        const res = await fetchDirect(item.url, 12000);
+        if (!res.ok) continue;
+        const html = await res.text();
+        const lds = extractLdJsonBlocks(html);
+        const prod = lds.find((x) => x["@type"] === "Product");
+        const offers = Array.isArray(prod?.offers)
+          ? prod.offers
+          : prod?.offers
+            ? [prod.offers]
+            : [];
+        const validPrices = offers
+          .filter((o) => !/OutOfStock/i.test(String(o?.availability || "")))
+          .map((o) => parseClpNumber(o?.price))
+          .filter((p) => p && p >= phone.minPlausiblePrice)
+          .sort((a, b) => a - b);
+
+        if (validPrices.length >= 2) {
+          item.specificPrice = validPrices[0];
+          item.anyPaymentPrice = validPrices[1];
+        } else if (validPrices.length === 1) {
+          item.specificPrice = validPrices[0];
+          item.anyPaymentPrice = validPrices[0];
+        }
+      } catch {
+        // Non-fatal; keep search-level Paris internet price
+      }
+    }
+
+    return candidates;
+  });
 }
 
 /**
