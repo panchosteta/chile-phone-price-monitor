@@ -1,5 +1,26 @@
 export const TARGET_PHONES = [
   {
+    id: "iphone-17",
+    name: "iPhone 17",
+    kind: "phone",
+    soloTodoCategoryId: 6,
+    thresholds: {
+      specificPaymentMax: 881991,
+      anyPaymentMax: 929990
+    },
+    minPlausiblePrice: 450000,
+    soloTodoSearches: ["iPhone 17"],
+    knastaSearches: ["iphone 17 256", "iphone 17 512"],
+    matchesTitle(text) {
+      const s = normalize(text);
+      return (
+        /\biphone\s*17\b/.test(s) &&
+        !/\biphone\s*17\s*(pro|max|air|plus|e)\b/.test(s) &&
+        !/\b(pro\s*max|17\s*pro|17e|17\s*air|17\s*plus)\b/.test(s)
+      );
+    }
+  },
+  {
     id: "xiaomi-17-ultra",
     name: "Xiaomi 17 Ultra",
     kind: "phone",

@@ -311,11 +311,16 @@ export async function fetchHitesDirect(phone) {
 }
 
 /**
- * 4. MacOnline direct product JSON-LD array (returns all 9 iPhone 17 Pro SKUs in 1 request)
+ * 4. MacOnline direct product JSON-LD array (returns all SKUs in 1 request)
  */
 export async function fetchMacOnlineDirect(phone) {
-  if (phone.id !== "iphone-17-pro") return [];
-  const res = await fetchDirect("https://www.maconline.com/products/iphone-17-pro", 10000);
+  const macOnlineUrls = {
+    "iphone-17": "https://www.maconline.com/products/iphone-17",
+    "iphone-17-pro": "https://www.maconline.com/products/iphone-17-pro"
+  };
+  const targetUrl = macOnlineUrls[phone.id];
+  if (!targetUrl) return [];
+  const res = await fetchDirect(targetUrl, 10000);
   if (!res.ok) throw new Error(`MacOnline HTTP ${res.status}`);
   const html = await res.text();
   const lds = extractLdJsonBlocks(html);
@@ -331,8 +336,7 @@ export async function fetchMacOnlineDirect(phone) {
     const price = parseClpNumber(offer?.price);
     if (!price || price < phone.minPlausiblePrice) continue;
 
-    const rawUrl = offer?.url || prod.url || "https://www.maconline.com/products/iphone-17-pro";
-    // MacOnline JSON-LD uses #default_sku=... whereas web links use ?default_sku=...
+    const rawUrl = offer?.url || prod.url || targetUrl;
     const url = rawUrl.replace("#default_sku=", "?default_sku=");
 
     listings.push({
