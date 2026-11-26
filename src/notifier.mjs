@@ -1,5 +1,6 @@
 import { formatCLP } from "./config.mjs";
 import { formatDealText } from "./evaluator.mjs";
+import { formatFlightDealText } from "./flights.mjs";
 
 const COOLDOWN_MS = Number(process.env.ALERT_COOLDOWN_HOURS || 12) * 60 * 60 * 1000;
 
@@ -217,6 +218,114 @@ async function sendGenericWebhook(deal) {
     signal: AbortSignal.timeout(10000)
   });
   if (!res.ok) throw new Error(`Webhook HTTP ${res.status}: ${await res.text()}`);
+}
+
+function flightDealKey(deal) {
+  return `flight|${deal.watchId}|${deal.departureDate}|${deal.returnDate}|${deal.airline.toLowerCase()}|${deal.stops}`;
+}
+
+export function filterNewOrLowerFlightDeals(deals, { force = false } = {}) {
+  const now = Date.now();
+  const toAlert = [];
+  for (const deal of deals) {
+    const key = flightDealKey(deal);
+    const prev = alertHistory.get(key);
+    const shouldAlert =
+      force ||
+      !prev ||
+      deal.price < prev.lastPrice ||
+      now - prev.lastAlertedAt >= COOLDOWN_MS;
+    if (shouldAlert) toAlert.push(deal);
+  }
+  return toAlert;
+}
+
+async function sendDiscordFlight(deal) {
+  const res = await fetch(process.env.DISCORD_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content: `✈️ **Baja de pasaje detectada: ${deal.origin} ↔ ${deal.destination} (${formatCLP(deal.price)})**`,
+      embeds: [
+        {
+          title: `${deal.origin} ↔ ${deal.destination} — ${formatCLP(deal.price)} ida y vuelta`,
+          url: deal.url,
+          color: 0x0ea5e9,
+          fields: [
+            { name: "Fechas (3 semanas)", value: `${deal.departureDate} → ${deal.returnDate} (${deal.nights}d)`, inline: true },
+            { name: "Aerolínea", value: `${deal.airline} (${deal.stopsLabel})`, inline: true },
+            { name: "Duración", value: deal.duration || "Ver en Google Flights", inline: true },
+            { name: "Precio ida y vuelta", value: formatCLP(deal.price), inline: true },
+            { name: "Umbral", value: formatCLP(deal.referencePrice), inline: true },
+            { name: "Ahorro", value: `-${formatCLP(deal.savingsClp)} (-${deal.savingsPct.toFixed(1)}%)`, inline: true }
+          ],
+          footer: { text: "Fuente: Google Flights (CLP)" },
+          timestamp: new Date().toISOString()
+        }
+      ]
+    }),
+    signal: AbortSignal.timeout(10000)
+  });
+  if (!res.ok) throw new Error(`Discord Flight HTTP ${res.status}: ${await res.text()}`);
+}
+
+export async function notifyFlightDeals(deals) {
+  const channels = getConfiguredChannels();
+  if (deals.length === 0 || channels.length === 0) {
+    return { sent: 0, channels, errors: [] };
+  }
+
+  const errors = [];
+  let sent = 0;
+
+  for (const deal of deals) {
+    const tasks = [];
+    if (process.env.NTFY_TOPIC) {
+      tasks.push([
+        "ntfy",
+        sendNtfyRaw({
+          title: `Vuelo ${deal.origin}-${deal.destination} ${formatCLP(deal.price)} (${deal.airline})`,
+          body: formatFlightDealText(deal),
+          tags: "airplane,moneybag",
+          clickUrl: deal.url
+        })
+      ]);
+    }
+    if (process.env.DISCORD_WEBHOOK_URL) {
+      tasks.push(["discord", sendDiscordFlight(deal)]);
+    }
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      tasks.push([
+        "telegram",
+        fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: process.env.TELEGRAM_CHAT_ID,
+            text: formatFlightDealText(deal)
+          }),
+          signal: AbortSignal.timeout(10000)
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`Telegram HTTP ${r.status}: ${await r.text()}`);
+        })
+      ]);
+    }
+
+    const results = await Promise.allSettled(tasks.map(([, p]) => p));
+    let anySuccess = false;
+    results.forEach((r, idx) => {
+      if (r.status === "fulfilled") anySuccess = true;
+      else errors.push(`${tasks[idx][0]}: ${r.reason?.message || r.reason}`);
+    });
+
+    if (anySuccess) {
+      sent += 1;
+      alertHistory.set(flightDealKey(deal), { lastPrice: deal.price, lastAlertedAt: Date.now() });
+    }
+    if (deals.length > 1) await new Promise((r) => setTimeout(r, 400));
+  }
+
+  return { sent, channels, errors };
 }
 
 export async function notifyDeals(deals) {

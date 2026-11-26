@@ -89,6 +89,43 @@ function renderHtmlStatus() {
     )
     .join("");
 
+  const flightSections = (lastResult?.flights?.summaries || [])
+    .map((f) => {
+      const rows = (f.bestPerDatePair || [])
+        .map(
+          (p) => `
+          <tr>
+            <td><strong>${escapeHtml(p.departureDate)} → ${escapeHtml(p.returnDate)}</strong> (${p.nights}d)</td>
+            <td><strong>${formatCLP(p.bestPrice)}</strong></td>
+            <td>${escapeHtml(p.bestAirline)} (${escapeHtml(p.bestStopsLabel)})</td>
+            <td>${p.bestDirectPrice ? `${formatCLP(p.bestDirectPrice)} (${escapeHtml(p.bestDirectAirline)})` : "—"}</td>
+            <td><a href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer">Google Flights</a></td>
+          </tr>`
+        )
+        .join("");
+
+      return `
+        <h3>✈️ ${escapeHtml(f.name)} <small>(${f.offersFound} vuelos · umbral: &lt; ${formatCLP(f.maxPriceClp)})</small></h3>
+        <table>
+          <thead><tr><th>Fechas (3 semanas)</th><th>Mejor precio</th><th>Aerolínea / Escalas</th><th>Mejor directo</th><th>Link</th></tr></thead>
+          <tbody>${rows || "<tr><td colspan='5'>Sin resultados</td></tr>"}</tbody>
+        </table>`;
+    })
+    .join("");
+
+  const flightDealCards = (lastResult?.flights?.deals || [])
+    .map(
+      (d) => `
+      <div style="border:1px solid #0ea5e9;border-radius:8px;padding:12px;margin-bottom:10px;background:#f0f9ff">
+        <strong>✈️ ${escapeHtml(d.origin)} ↔ ${escapeHtml(d.destination)} (${escapeHtml(d.departureDate)} → ${escapeHtml(d.returnDate)})</strong> —
+        <strong style="color:#0369a1">${formatCLP(d.price)}</strong>
+        (ahorro -${formatCLP(d.savingsClp)} / -${d.savingsPct.toFixed(1)}%)<br>
+        Aerolínea: <strong>${escapeHtml(d.airline)}</strong> (${escapeHtml(d.stopsLabel)}) |
+        <a href="${escapeHtml(d.url)}" target="_blank" rel="noreferrer">Ver en Google Flights</a>
+      </div>`
+    )
+    .join("");
+
   return `<!doctype html>
 <html lang="es">
 <head>
@@ -103,14 +140,18 @@ function renderHtmlStatus() {
   </style>
 </head>
 <body>
-  <h1>📱 Monitor de Bajas de Precio — Chile (Todos los Almacenamientos)</h1>
+  <h1>📱 Monitor de Bajas de Precio — Chile + ✈️ Vuelos</h1>
   <p>
     <strong>Último chequeo:</strong> ${escapeHtml(updated)} (chequeo #${runCount})<br>
-    <strong>Intervalo:</strong> cada ${CHECK_INTERVAL_SECONDS}s |
+    <strong>Intervalo:</strong> productos cada ${CHECK_INTERVAL_SECONDS}s · vuelos cada ${Number(
+    process.env.FLIGHT_CHECK_INTERVAL_MINUTES || 30
+  )} min |
     <strong>Canales de alerta:</strong> ${channels.length ? escapeHtml(channels.join(", ")) : "ninguno configurado"}
   </p>
   <h2>🚨 Alertas activas bajo umbral</h2>
-  ${dealCards || "<p>No hay bajas confirmadas bajo umbral en el último chequeo.</p>"}
+  ${dealCards || flightDealCards ? `${dealCards}${flightDealCards}` : "<p>No hay bajas confirmadas bajo umbral en el último chequeo.</p>"}
+  <h2>✈️ Vuelos monitoreados</h2>
+  ${flightSections || "<p>Cargando vuelos...</p>"}
   <h2>📊 Comparativa por tienda y almacenamiento</h2>
   ${sections || "<p>Cargando...</p>"}
 </body>

@@ -1,7 +1,14 @@
 import { getSpecificPaymentLabel, isPriorityStore } from "./config.mjs";
 import { fetchAllListings } from "./sources.mjs";
 import { findVerifiedDeals } from "./evaluator.mjs";
-import { filterNewOrLowerDeals, notifyDeals, getConfiguredChannels } from "./notifier.mjs";
+import { checkFlights } from "./flights.mjs";
+import {
+  filterNewOrLowerDeals,
+  filterNewOrLowerFlightDeals,
+  notifyDeals,
+  notifyFlightDeals,
+  getConfiguredChannels
+} from "./notifier.mjs";
 
 function normalizeStoreGroup(store = "") {
   const s = store.toLowerCase();
@@ -54,16 +61,26 @@ function buildStoreCapacityOptions(listings) {
   return [...bestByBucket.values()].sort((a, b) => a.specificPrice - b.specificPrice);
 }
 
-export async function runMonitorCycle({ notify = true, forceNotify = false } = {}) {
+export async function runMonitorCycle({ notify = true, forceNotify = false, forceFlights = false } = {}) {
   const startedAt = new Date();
-  const { perPhone, errors: fetchErrors } = await fetchAllListings();
+  const [{ perPhone, errors: fetchErrors }, flightRes] = await Promise.all([
+    fetchAllListings(),
+    checkFlights({ forceRefresh: forceFlights })
+  ]);
   const deals = await findVerifiedDeals(perPhone);
+  const flightDeals = flightRes.flightDeals || [];
 
   let notificationResult = { sent: 0, channels: getConfiguredChannels(), errors: [] };
+  let flightNotifyResult = { sent: 0, channels: getConfiguredChannels(), errors: [] };
+
   const dealsToNotify = notify ? filterNewOrLowerDeals(deals, { force: forceNotify }) : [];
+  const flightsToNotify = notify ? filterNewOrLowerFlightDeals(flightDeals, { force: forceNotify }) : [];
 
   if (notify && dealsToNotify.length > 0) {
     notificationResult = await notifyDeals(dealsToNotify);
+  }
+  if (notify && flightsToNotify.length > 0) {
+    flightNotifyResult = await notifyFlightDeals(flightsToNotify);
   }
 
   const summaryByPhone = perPhone.map(({ phone, listings }) => {
@@ -112,8 +129,19 @@ export async function runMonitorCycle({ notify = true, forceNotify = false } = {
     durationMs: Date.now() - startedAt.getTime(),
     summaryByPhone,
     deals,
-    notifiedCount: notificationResult.sent,
+    flights: {
+      checkedAt: flightRes.checkedAt,
+      fromCache: flightRes.fromCache,
+      summaries: flightRes.summaries,
+      deals: flightDeals
+    },
+    notifiedCount: notificationResult.sent + flightNotifyResult.sent,
     channels: notificationResult.channels,
-    errors: [...fetchErrors, ...notificationResult.errors]
+    errors: [
+      ...fetchErrors,
+      ...(flightRes.errors || []),
+      ...notificationResult.errors,
+      ...flightNotifyResult.errors
+    ]
   };
 }
