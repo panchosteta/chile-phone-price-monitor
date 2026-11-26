@@ -143,7 +143,7 @@ export async function checkFlights({ forceRefresh = false } = {}) {
       } catch (err) {
         errors.push(`Vuelos (${dep}): ${err.message}`);
       }
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 900));
     }
 
     allOffers.sort((a, b) => a.price - b.price);

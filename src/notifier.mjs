@@ -98,7 +98,7 @@ export async function sendTestNotification(serviceUrl = "") {
     return { ok: false, channels, error: "No hay canales configurados" };
   }
   const errors = [];
-  const summaryText = `✅ Monitor de Precios Chile activo.\nProductos: iPhone 17 Pro, Galaxy Z Fold 8, Galaxy S26 Ultra, Xiaomi 17 Ultra, RX 9060 XT 16 GB y RX 9060 XT 8 GB (nuevos).${
+  const summaryText = `✅ Monitor de Precios Chile activo.\nMonitoreando: Xiaomi 17 Ultra, AMD Radeon RX 9060 XT (16 GB y 8 GB) y vuelos SCL ↔ MAD junio 2027 (3 semanas, < $700.000).${
     serviceUrl ? `\nDashboard: ${serviceUrl}` : ""
   }`;
 

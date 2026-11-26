@@ -1,56 +1,5 @@
 export const TARGET_PHONES = [
   {
-    id: "iphone-17-pro",
-    name: "iPhone 17 Pro",
-    kind: "phone",
-    soloTodoCategoryId: 6,
-    thresholds: {
-      specificPaymentMax: 1142991,
-      anyPaymentMax: 1269990
-    },
-    minPlausiblePrice: 500000,
-    soloTodoSearches: ["iPhone 17 Pro"],
-    knastaSearches: ["iphone 17 pro", "iphone 17 pro 512", "iphone 17 pro 1tb"],
-    matchesTitle(text) {
-      const s = normalize(text);
-      return /\biphone\s*17\s*pro\b/.test(s) && !/\bpro\s*max\b/.test(s);
-    }
-  },
-  {
-    id: "galaxy-z-fold-8",
-    name: "Samsung Galaxy Z Fold 8",
-    kind: "phone",
-    soloTodoCategoryId: 6,
-    thresholds: {
-      specificPaymentMax: 1559990,
-      anyPaymentMax: 1599990
-    },
-    minPlausiblePrice: 600000,
-    soloTodoSearches: ["Z Fold8", "Z Fold 8"],
-    knastaSearches: ["galaxy z fold 8", "galaxy z fold8"],
-    matchesTitle(text) {
-      const s = normalize(text);
-      return /\bz\s*fold\s*8\b/.test(s) && !/\bultra\b/.test(s);
-    }
-  },
-  {
-    id: "galaxy-s26-ultra",
-    name: "Samsung Galaxy S26 Ultra",
-    kind: "phone",
-    soloTodoCategoryId: 6,
-    thresholds: {
-      specificPaymentMax: 1145547,
-      anyPaymentMax: 1145547
-    },
-    minPlausiblePrice: 500000,
-    soloTodoSearches: ["Galaxy S26 Ultra"],
-    knastaSearches: ["galaxy s26 ultra", "galaxy s26 ultra 512", "galaxy s26 ultra 1tb"],
-    matchesTitle(text) {
-      const s = normalize(text);
-      return /\bs26\s*ultra\b/.test(s);
-    }
-  },
-  {
     id: "xiaomi-17-ultra",
     name: "Xiaomi 17 Ultra",
     kind: "phone",
